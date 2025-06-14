@@ -24,6 +24,9 @@ export interface Cluster {
   port: number;
   hosts: string[];
   datacenter: string;
+  status: 'online' | 'offline' | 'unknown';
+  onlineHosts: number;
+  totalHosts: number;
 }
 
 export interface QueryResult {
@@ -122,12 +125,27 @@ class ApiService {
     return this.request<Cluster[]>('/clusters');
   }
 
+  async getClustersHealth(): Promise<any[]> {
+    return this.request<any[]>('/clusters/health');
+  }
+
   // Queries
-  async executeQuery(clusterId: number, query: string): Promise<QueryResult> {
-    return this.request<QueryResult>('/query/execute', {
+  async executeQuery(clusterId: number, query: string): Promise<QueryResult & { queryId: string }> {
+    return this.request<QueryResult & { queryId: string }>('/query/execute', {
       method: 'POST',
       body: JSON.stringify({ clusterId, query }),
     });
+  }
+
+  async cancelQuery(queryId: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/query/cancel', {
+      method: 'POST',
+      body: JSON.stringify({ queryId }),
+    });
+  }
+
+  async getRunningQueries(): Promise<any[]> {
+    return this.request<any[]>('/queries/running');
   }
 
   // Usuários

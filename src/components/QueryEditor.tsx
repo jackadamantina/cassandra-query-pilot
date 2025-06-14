@@ -8,9 +8,11 @@ import { Play } from "lucide-react";
 interface QueryEditorProps {
   onExecuteQuery: (query: string) => void;
   isLoading: boolean;
+  onCancelQuery?: () => void;
+  canCancel?: boolean;
 }
 
-export const QueryEditor = ({ onExecuteQuery, isLoading }: QueryEditorProps) => {
+export const QueryEditor = ({ onExecuteQuery, isLoading, onCancelQuery, canCancel }: QueryEditorProps) => {
   const [query, setQuery] = useState("");
 
   const handleExecute = () => {
@@ -30,14 +32,25 @@ export const QueryEditor = ({ onExecuteQuery, isLoading }: QueryEditorProps) => 
       <CardHeader>
         <CardTitle className="flex items-center justify-between">
           Editor de Query
-          <Button 
-            onClick={handleExecute} 
-            disabled={!query.trim() || isLoading}
-            size="sm"
-          >
-            <Play className="w-4 h-4 mr-2" />
-            {isLoading ? "Executando..." : "Executar (Ctrl+Enter)"}
-          </Button>
+          <div className="flex items-center space-x-2">
+            {canCancel && isLoading && (
+              <Button 
+                onClick={onCancelQuery} 
+                variant="destructive"
+                size="sm"
+              >
+                Cancelar Query
+              </Button>
+            )}
+            <Button 
+              onClick={handleExecute} 
+              disabled={!query.trim() || isLoading}
+              size="sm"
+            >
+              <Play className="w-4 h-4 mr-2" />
+              {isLoading ? "Executando..." : "Executar (Ctrl+Enter)"}
+            </Button>
+          </div>
         </CardTitle>
       </CardHeader>
       <CardContent>

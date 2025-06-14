@@ -18,6 +18,8 @@ const Index = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [clusters, setClusters] = useState<Cluster[]>([]);
+  const [currentQueryId, setCurrentQueryId] = useState<string | null>(null);
+  const [isQueryCancelling, setIsQueryCancelling] = useState(false);
 
   // Verificar se o usuário já está autenticado
   useEffect(() => {
@@ -61,16 +63,37 @@ const Index = () => {
     }
 
     setIsLoading(true);
+    setCurrentQueryId(null);
     
     try {
       const result = await apiService.executeQuery(parseInt(selectedCluster), query);
       setQueryResult(result);
       setCurrentPage(1);
+      setCurrentQueryId(result.queryId);
     } catch (error) {
       console.error('Erro ao executar query:', error);
       alert(`Erro ao executar query: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
     } finally {
       setIsLoading(false);
+      setCurrentQueryId(null);
+    }
+  };
+
+  const handleCancelQuery = async () => {
+    if (!currentQueryId) return;
+
+    setIsQueryCancelling(true);
+    
+    try {
+      await apiService.cancelQuery(currentQueryId);
+      alert('Query cancelada com sucesso');
+      setIsLoading(false);
+      setCurrentQueryId(null);
+    } catch (error) {
+      console.error('Erro ao cancelar query:', error);
+      alert(`Erro ao cancelar query: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+    } finally {
+      setIsQueryCancelling(false);
     }
   };
 
@@ -92,30 +115,57 @@ const Index = () => {
       {/* Header */}
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <h1 className="text-xl font-semibold text-gray-900">
-              Cassandra Query Pilot
-            </h1>
-            <div className="flex items-center space-x-4">
+          <div className="flex items-center justify-between h-16">
+            {/* Left side - Logo and Navigation */}
+            <div className="flex items-center space-x-6">
+              <h1 className="text-xl font-semibold text-gray-900">
+                Cassandra Query Pilot
+              </h1>
+              <div className="flex items-center space-x-2">
+                <Button 
+                  className="bg-blue-600 hover:bg-blue-700 text-white" 
+                  size="sm" 
+                  onClick={() => navigate('/users')}
+                >
+                  <Users className="w-4 h-4 mr-2" />
+                  Usuários
+                </Button>
+                <Button 
+                  className="bg-blue-600 hover:bg-blue-700 text-white" 
+                  size="sm" 
+                  onClick={() => navigate('/logs')}
+                >
+                  <FileText className="w-4 h-4 mr-2" />
+                  Logs
+                </Button>
+              </div>
+            </div>
+
+            {/* Center - Cluster Selector */}
+            <div className="flex-1 flex justify-center">
               <ClusterSelector 
                 selectedCluster={selectedCluster}
                 onClusterChange={setSelectedCluster}
                 clusters={clusters}
               />
-              <div className="flex items-center space-x-2">
-                <Button variant="outline" size="sm" onClick={() => navigate('/users')}>
-                  <Users className="w-4 h-4 mr-2" />
-                  Usuários
+            </div>
+
+            {/* Right side - User menu and cancel button */}
+            <div className="flex items-center space-x-2">
+              {isLoading && currentQueryId && (
+                <Button 
+                  variant="destructive" 
+                  size="sm" 
+                  onClick={handleCancelQuery}
+                  disabled={isQueryCancelling}
+                >
+                  {isQueryCancelling ? 'Cancelando...' : 'Cancelar Query'}
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => navigate('/logs')}>
-                  <FileText className="w-4 h-4 mr-2" />
-                  Logs
-                </Button>
-                <Button variant="outline" size="sm" onClick={handleLogout}>
-                  <LogOut className="w-4 h-4 mr-2" />
-                  Sair ({currentUser?.username})
-                </Button>
-              </div>
+              )}
+              <Button variant="outline" size="sm" onClick={handleLogout}>
+                <LogOut className="w-4 h-4 mr-2" />
+                Sair ({currentUser?.username})
+              </Button>
             </div>
           </div>
         </div>
@@ -127,6 +177,8 @@ const Index = () => {
           <QueryEditor 
             onExecuteQuery={handleExecuteQuery}
             isLoading={isLoading}
+            onCancelQuery={handleCancelQuery}
+            canCancel={!!currentQueryId}
           />
           <QueryResults 
             result={queryResult}

@@ -134,6 +134,99 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// Cache para status de clusters
+const clusterStatusCache = new Map();
+
+// Cache para queries em execução (para cancelamento)
+const runningQueries = new Map();
+
+// Função para verificar conectividade de um host
+const checkHostConnectivity = (host, port) => {
+  return new Promise((resolve) => {
+    const net = require('net');
+    const socket = new net.Socket();
+    
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      resolve(false);
+    }, 3000); // 3 segundos timeout
+
+    socket.connect(port, host, () => {
+      clearTimeout(timeout);
+      socket.destroy();
+      resolve(true);
+    });
+
+    socket.on('error', () => {
+      clearTimeout(timeout);
+      resolve(false);
+    });
+  });
+};
+
+// Função para verificar status de todos os hosts de um cluster
+const checkClusterHealth = async (cluster) => {
+  let hosts;
+  try {
+    if (cluster.hosts && typeof cluster.hosts === 'string') {
+      hosts = JSON.parse(cluster.hosts);
+    } else if (cluster.hosts && Array.isArray(cluster.hosts)) {
+      hosts = cluster.hosts;
+    } else {
+      hosts = [`${cluster.host}:${cluster.port}`];
+    }
+  } catch (error) {
+    hosts = [`${cluster.host}:${cluster.port}`];
+  }
+
+  const hostStatuses = await Promise.all(
+    hosts.map(async (hostPort) => {
+      const [host, port] = hostPort.split(':');
+      const isOnline = await checkHostConnectivity(host, parseInt(port) || 9042);
+      return { host: hostPort, online: isOnline };
+    })
+  );
+
+  const onlineHosts = hostStatuses.filter(h => h.online).length;
+  const totalHosts = hostStatuses.length;
+  
+  return {
+    clusterId: cluster.id,
+    status: onlineHosts > 0 ? 'online' : 'offline',
+    onlineHosts,
+    totalHosts,
+    hostStatuses
+  };
+};
+
+// Rota para verificar status dos clusters
+app.get('/api/clusters/health', authenticateToken, async (req, res) => {
+  try {
+    const connection = await pool.getConnection();
+    const [rows] = await connection.execute(
+      'SELECT id, name, host, port, hosts, datacenter FROM cassandra_clusters WHERE is_active = TRUE'
+    );
+    connection.release();
+
+    const healthChecks = await Promise.all(
+      rows.map(cluster => checkClusterHealth(cluster))
+    );
+
+    // Atualizar cache
+    healthChecks.forEach(health => {
+      clusterStatusCache.set(health.clusterId, {
+        ...health,
+        lastCheck: new Date()
+      });
+    });
+
+    res.json(healthChecks);
+  } catch (error) {
+    console.error('Erro ao verificar health dos clusters:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
 // Rota para listar clusters
 app.get('/api/clusters', authenticateToken, async (req, res) => {
   try {
@@ -158,15 +251,62 @@ app.get('/api/clusters', authenticateToken, async (req, res) => {
         console.error(`Erro ao parsear JSON hosts para cluster ${row.name}:`, error);
         hosts = [`${row.host}:${row.port}`];
       }
+
+      // Adicionar status do cache se disponível
+      const cachedStatus = clusterStatusCache.get(row.id);
+      
       return {
         ...row,
-        hosts
+        hosts,
+        status: cachedStatus?.status || 'unknown',
+        onlineHosts: cachedStatus?.onlineHosts || 0,
+        totalHosts: cachedStatus?.totalHosts || hosts.length
       };
     });
 
     res.json(clustersWithHosts);
   } catch (error) {
     console.error('Erro ao listar clusters:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
+// Rota para cancelar query
+app.post('/api/query/cancel', authenticateToken, async (req, res) => {
+  try {
+    const { queryId } = req.body;
+    
+    if (!queryId) {
+      return res.status(400).json({ error: 'Query ID é obrigatório' });
+    }
+
+    const queryInfo = runningQueries.get(queryId);
+    if (!queryInfo) {
+      return res.status(404).json({ error: 'Query não encontrada ou já finalizada' });
+    }
+
+    // Verificar se o usuário pode cancelar esta query
+    if (queryInfo.userId !== req.user.id && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Não autorizado a cancelar esta query' });
+    }
+
+    // Marcar query como cancelada
+    queryInfo.cancelled = true;
+    
+    // Tentar fechar a conexão Cassandra se existir
+    if (queryInfo.cassandraClient) {
+      try {
+        await queryInfo.cassandraClient.shutdown();
+      } catch (error) {
+        console.error('Erro ao fechar conexão Cassandra durante cancelamento:', error);
+      }
+    }
+
+    runningQueries.delete(queryId);
+    
+    res.json({ message: 'Query cancelada com sucesso' });
+  } catch (error) {
+    console.error('Erro ao cancelar query:', error);
     res.status(500).json({ error: 'Erro interno do servidor' });
   }
 });
@@ -179,6 +319,18 @@ app.post('/api/query/execute', authenticateToken, async (req, res) => {
     if (!clusterId || !query) {
       return res.status(400).json({ error: 'Cluster ID e query são obrigatórios' });
     }
+
+    // Gerar ID único para a query
+    const queryId = `query_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Registrar query em execução
+    runningQueries.set(queryId, {
+      userId: req.user.id,
+      clusterId,
+      query,
+      startTime: Date.now(),
+      cancelled: false
+    });
 
     // Buscar informações do cluster
     const connection = await pool.getConnection();
@@ -252,10 +404,26 @@ app.post('/api/query/execute', authenticateToken, async (req, res) => {
         }
       });
 
+      // Armazenar referência do cliente para cancelamento
+      const queryInfo = runningQueries.get(queryId);
+      if (queryInfo) {
+        queryInfo.cassandraClient = cassandraClient;
+      }
+
       try {
+        // Verificar se query foi cancelada antes de executar
+        if (queryInfo && queryInfo.cancelled) {
+          throw new Error('Query cancelada pelo usuário');
+        }
+
         console.log(`Executando query Cassandra: ${query}`);
         // Executar a query real
         const result = await cassandraClient.execute(query);
+        
+        // Verificar se query foi cancelada durante execução
+        if (queryInfo && queryInfo.cancelled) {
+          throw new Error('Query cancelada pelo usuário');
+        }
         console.log(`Query executada com sucesso. Colunas: ${result.columns?.length || 0}, Linhas: ${result.rows?.length || 0}`);
         
         // Processar resultado
@@ -293,7 +461,13 @@ app.post('/api/query/execute', authenticateToken, async (req, res) => {
         // Log de auditoria
         await logAudit(req.user.id, 'EXECUTE_QUERY', 'CLUSTER', clusterId, { query, executionTime, rowsReturned: queryResult.totalRows }, req);
 
-        res.json(queryResult);
+        // Remover query do cache de execução
+        runningQueries.delete(queryId);
+
+        res.json({
+          ...queryResult,
+          queryId
+        });
 
       } catch (cassandraError) {
         console.error('Erro na conexão/execução Cassandra:', cassandraError.message || cassandraError);
@@ -303,12 +477,17 @@ app.post('/api/query/execute', authenticateToken, async (req, res) => {
         } catch (shutdownError) {
           console.error('Erro ao fechar conexão Cassandra:', shutdownError);
         }
+        // Remover query do cache de execução
+        runningQueries.delete(queryId);
         throw cassandraError;
       }
 
     } catch (queryError) {
       console.error('Erro geral na execução da query:', queryError.message || queryError);
       const executionTime = Date.now() - startTime;
+
+      // Remover query do cache de execução
+      runningQueries.delete(queryId);
 
       // Log de erro da query
       const connection3 = await pool.getConnection();
@@ -592,10 +771,70 @@ app.get('/api/logs/audit', authenticateToken, async (req, res) => {
   }
 });
 
+// Rota para listar queries em execução
+app.get('/api/queries/running', authenticateToken, async (req, res) => {
+  try {
+    const userQueries = [];
+    
+    for (const [queryId, queryInfo] of runningQueries.entries()) {
+      // Usuários podem ver apenas suas queries, admins podem ver todas
+      if (req.user.role === 'admin' || queryInfo.userId === req.user.id) {
+        userQueries.push({
+          queryId,
+          query: queryInfo.query,
+          clusterId: queryInfo.clusterId,
+          startTime: queryInfo.startTime,
+          duration: Date.now() - queryInfo.startTime
+        });
+      }
+    }
+    
+    res.json(userQueries);
+  } catch (error) {
+    console.error('Erro ao listar queries em execução:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
 // Rota de health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
+
+// Timer para verificar health dos clusters automaticamente
+const startClusterHealthCheck = async () => {
+  const checkHealth = async () => {
+    try {
+      const connection = await pool.getConnection();
+      const [rows] = await connection.execute(
+        'SELECT id, name, host, port, hosts, datacenter FROM cassandra_clusters WHERE is_active = TRUE'
+      );
+      connection.release();
+
+      const healthChecks = await Promise.all(
+        rows.map(cluster => checkClusterHealth(cluster))
+      );
+
+      // Atualizar cache
+      healthChecks.forEach(health => {
+        clusterStatusCache.set(health.clusterId, {
+          ...health,
+          lastCheck: new Date()
+        });
+      });
+
+      console.log(`Health check concluído para ${healthChecks.length} clusters`);
+    } catch (error) {
+      console.error('Erro no health check automático:', error);
+    }
+  };
+
+  // Executar imediatamente
+  await checkHealth();
+  
+  // Executar a cada 1 minuto
+  setInterval(checkHealth, 60000);
+};
 
 // Inicializar servidor
 const startServer = async () => {
@@ -610,6 +849,9 @@ const startServer = async () => {
 
     app.listen(PORT, () => {
       console.log(`Servidor rodando na porta ${PORT}`);
+      
+      // Iniciar health check automático dos clusters
+      startClusterHealthCheck();
     });
 
   } catch (error) {
