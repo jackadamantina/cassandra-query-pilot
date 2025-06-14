@@ -15,7 +15,7 @@ export const ClusterSelector = ({ selectedCluster, onClusterChange, clusters }: 
         Cluster Cassandra:
       </label>
       <Select value={selectedCluster} onValueChange={onClusterChange}>
-        <SelectTrigger className="w-48">
+        <SelectTrigger className="w-96">
           <SelectValue placeholder="Selecione um cluster" />
         </SelectTrigger>
         <SelectContent>
