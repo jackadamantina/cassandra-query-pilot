@@ -1,37 +1,57 @@
 
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { ClusterSelector } from "@/components/ClusterSelector";
 import { QueryEditor } from "@/components/QueryEditor";
 import { QueryResults, QueryResult } from "@/components/QueryResults";
 import { LoginForm } from "@/components/LoginForm";
 import { Button } from "@/components/ui/button";
 import { LogOut, Users, FileText } from "lucide-react";
+import { apiService, User, Cluster } from "@/lib/api";
 
 const Index = () => {
+  const navigate = useNavigate();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedCluster, setSelectedCluster] = useState("");
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const [currentUser, setCurrentUser] = useState("");
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [clusters, setClusters] = useState<Cluster[]>([]);
 
-  // Simulação de autenticação (substituir pela integração com Supabase)
+  // Verificar se o usuário já está autenticado
+  useEffect(() => {
+    const token = localStorage.getItem('authToken');
+    if (token) {
+      loadClusters();
+      setIsAuthenticated(true);
+    }
+  }, []);
+
+  const loadClusters = async () => {
+    try {
+      const clustersData = await apiService.getClusters();
+      setClusters(clustersData);
+    } catch (error) {
+      console.error('Erro ao carregar clusters:', error);
+    }
+  };
+
   const handleLogin = async (username: string, password: string): Promise<boolean> => {
     setIsLoading(true);
     
-    // Simular delay de autenticação
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // Credenciais padrão
-    if (username === "admin" && password === "admin123") {
-      setCurrentUser(username);
+    try {
+      const response = await apiService.login(username, password);
+      setCurrentUser(response.user);
       setIsAuthenticated(true);
+      await loadClusters();
       setIsLoading(false);
       return true;
+    } catch (error) {
+      console.error('Erro no login:', error);
+      setIsLoading(false);
+      return false;
     }
-    
-    setIsLoading(false);
-    return false;
   };
 
   const handleExecuteQuery = async (query: string) => {
@@ -42,33 +62,25 @@ const Index = () => {
 
     setIsLoading(true);
     
-    // Simular execução da query (substituir pela integração real)
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    // Dados simulados
-    const mockResult: QueryResult = {
-      columns: ["id", "name", "email", "created_at"],
-      rows: [
-        ["1", "João Silva", "joao@example.com", "2024-01-15 10:30:00"],
-        ["2", "Maria Santos", "maria@example.com", "2024-01-15 11:45:00"],
-        ["3", "Pedro Oliveira", "pedro@example.com", "2024-01-15 14:20:00"]
-      ],
-      totalRows: 3,
-      executionTime: 125
-    };
-    
-    setQueryResult(mockResult);
-    setCurrentPage(1);
-    setIsLoading(false);
-    
-    console.log(`Query executada no cluster ${selectedCluster}: ${query}`);
+    try {
+      const result = await apiService.executeQuery(parseInt(selectedCluster), query);
+      setQueryResult(result);
+      setCurrentPage(1);
+    } catch (error) {
+      console.error('Erro ao executar query:', error);
+      alert(`Erro ao executar query: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleLogout = () => {
+    apiService.logout();
     setIsAuthenticated(false);
-    setCurrentUser("");
+    setCurrentUser(null);
     setSelectedCluster("");
     setQueryResult(null);
+    setClusters([]);
   };
 
   if (!isAuthenticated) {
@@ -88,19 +100,20 @@ const Index = () => {
               <ClusterSelector 
                 selectedCluster={selectedCluster}
                 onClusterChange={setSelectedCluster}
+                clusters={clusters}
               />
               <div className="flex items-center space-x-2">
-                <Button variant="outline" size="sm">
+                <Button variant="outline" size="sm" onClick={() => navigate('/users')}>
                   <Users className="w-4 h-4 mr-2" />
                   Usuários
                 </Button>
-                <Button variant="outline" size="sm">
+                <Button variant="outline" size="sm" onClick={() => navigate('/logs')}>
                   <FileText className="w-4 h-4 mr-2" />
                   Logs
                 </Button>
                 <Button variant="outline" size="sm" onClick={handleLogout}>
                   <LogOut className="w-4 h-4 mr-2" />
-                  Sair ({currentUser})
+                  Sair ({currentUser?.username})
                 </Button>
               </div>
             </div>
