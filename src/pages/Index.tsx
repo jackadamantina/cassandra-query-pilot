@@ -5,8 +5,9 @@ import { ClusterSelector } from "@/components/ClusterSelector";
 import { QueryEditor } from "@/components/QueryEditor";
 import { QueryResults, QueryResult } from "@/components/QueryResults";
 import { LoginForm } from "@/components/LoginForm";
+import { Sidebar } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
-import { LogOut, Users, FileText } from "lucide-react";
+import { LogOut } from "lucide-react";
 import { apiService, User, Cluster } from "@/lib/api";
 
 const Index = () => {
@@ -20,6 +21,7 @@ const Index = () => {
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [currentQueryId, setCurrentQueryId] = useState<string | null>(null);
   const [isQueryCancelling, setIsQueryCancelling] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   // Verificar se o usuário já está autenticado
   useEffect(() => {
@@ -111,83 +113,67 @@ const Index = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            {/* Left side - Logo and Navigation */}
-            <div className="flex items-center space-x-6">
-              <h1 className="text-xl font-semibold text-gray-900">
-                Cassandra Query Pilot
-              </h1>
+    <div className="min-h-screen bg-gray-50 flex">
+      {/* Sidebar */}
+      <Sidebar 
+        isCollapsed={isSidebarCollapsed}
+        onToggle={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+      />
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col">
+        {/* Header */}
+        <header className="bg-white shadow-sm border-b">
+          <div className="px-4 sm:px-6 lg:px-8">
+            <div className="flex items-center justify-between h-16">
+              {/* Center - Cluster Selector */}
+              <div className="flex-1 flex justify-center">
+                <ClusterSelector 
+                  selectedCluster={selectedCluster}
+                  onClusterChange={setSelectedCluster}
+                  clusters={clusters}
+                />
+              </div>
+
+              {/* Right side - User menu and cancel button */}
               <div className="flex items-center space-x-2">
-                <Button 
-                  className="bg-blue-600 hover:bg-blue-700 text-white" 
-                  size="sm" 
-                  onClick={() => navigate('/users')}
-                >
-                  <Users className="w-4 h-4 mr-2" />
-                  Usuários
-                </Button>
-                <Button 
-                  className="bg-blue-600 hover:bg-blue-700 text-white" 
-                  size="sm" 
-                  onClick={() => navigate('/logs')}
-                >
-                  <FileText className="w-4 h-4 mr-2" />
-                  Logs
+                {isLoading && currentQueryId && (
+                  <Button 
+                    variant="destructive" 
+                    size="sm" 
+                    onClick={handleCancelQuery}
+                    disabled={isQueryCancelling}
+                  >
+                    {isQueryCancelling ? 'Cancelando...' : 'Cancelar Query'}
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" onClick={handleLogout}>
+                  <LogOut className="w-4 h-4 mr-2" />
+                  Sair ({currentUser?.username})
                 </Button>
               </div>
             </div>
-
-            {/* Center - Cluster Selector */}
-            <div className="flex-1 flex justify-center">
-              <ClusterSelector 
-                selectedCluster={selectedCluster}
-                onClusterChange={setSelectedCluster}
-                clusters={clusters}
-              />
-            </div>
-
-            {/* Right side - User menu and cancel button */}
-            <div className="flex items-center space-x-2">
-              {isLoading && currentQueryId && (
-                <Button 
-                  variant="destructive" 
-                  size="sm" 
-                  onClick={handleCancelQuery}
-                  disabled={isQueryCancelling}
-                >
-                  {isQueryCancelling ? 'Cancelando...' : 'Cancelar Query'}
-                </Button>
-              )}
-              <Button variant="outline" size="sm" onClick={handleLogout}>
-                <LogOut className="w-4 h-4 mr-2" />
-                Sair ({currentUser?.username})
-              </Button>
-            </div>
           </div>
-        </div>
-      </header>
+        </header>
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="space-y-6">
-          <QueryEditor 
-            onExecuteQuery={handleExecuteQuery}
-            isLoading={isLoading}
-            onCancelQuery={handleCancelQuery}
-            canCancel={!!currentQueryId}
-          />
-          <QueryResults 
-            result={queryResult}
-            currentPage={currentPage}
-            onPageChange={setCurrentPage}
-            isLoading={isLoading}
-          />
-        </div>
-      </main>
+        {/* Main Content */}
+        <main className="flex-1 px-4 sm:px-6 lg:px-8 py-8">
+          <div className="max-w-7xl mx-auto space-y-6">
+            <QueryEditor 
+              onExecuteQuery={handleExecuteQuery}
+              isLoading={isLoading}
+              onCancelQuery={handleCancelQuery}
+              canCancel={!!currentQueryId}
+            />
+            <QueryResults 
+              result={queryResult}
+              currentPage={currentPage}
+              onPageChange={setCurrentPage}
+              isLoading={isLoading}
+            />
+          </div>
+        </main>
+      </div>
     </div>
   );
 };

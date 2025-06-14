@@ -700,9 +700,9 @@ app.delete('/api/users/:id', authenticateToken, async (req, res) => {
 app.get('/api/logs/queries', authenticateToken, async (req, res) => {
   try {
     const { page = 1, limit = 50, userId, clusterId } = req.query;
-    const offset = (page - 1) * limit;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    let whereClause = '1=1';
+    let whereClause = 'WHERE 1=1';
     let params = [];
 
     if (req.user.role !== 'admin') {
@@ -710,18 +710,22 @@ app.get('/api/logs/queries', authenticateToken, async (req, res) => {
       params.push(req.user.id);
     } else if (userId) {
       whereClause += ' AND ql.user_id = ?';
-      params.push(userId);
+      params.push(parseInt(userId));
     }
 
     if (clusterId) {
       whereClause += ' AND ql.cluster_id = ?';
-      params.push(clusterId);
+      params.push(parseInt(clusterId));
     }
 
-    params.push(parseInt(limit), parseInt(offset));
+    // Adicionar os parâmetros LIMIT e OFFSET no final
+    params.push(parseInt(limit));
+    params.push(offset);
+
+    console.log('Query logs params:', params);
 
     const connection = await pool.getConnection();
-    const [rows] = await connection.execute(`
+    const query = `
       SELECT 
         ql.*,
         u.username,
@@ -729,10 +733,13 @@ app.get('/api/logs/queries', authenticateToken, async (req, res) => {
       FROM query_logs ql
       JOIN users u ON ql.user_id = u.id
       JOIN cassandra_clusters cc ON ql.cluster_id = cc.id
-      WHERE ${whereClause}
+      ${whereClause}
       ORDER BY ql.created_at DESC
       LIMIT ? OFFSET ?
-    `, params);
+    `;
+    
+    console.log('Executing query:', query);
+    const [rows] = await connection.execute(query, params);
     connection.release();
 
     res.json(rows);
@@ -750,10 +757,13 @@ app.get('/api/logs/audit', authenticateToken, async (req, res) => {
     }
 
     const { page = 1, limit = 50 } = req.query;
-    const offset = (page - 1) * limit;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const params = [parseInt(limit), offset];
+    console.log('Audit logs params:', params);
 
     const connection = await pool.getConnection();
-    const [rows] = await connection.execute(`
+    const query = `
       SELECT 
         al.*,
         u.username
@@ -761,7 +771,10 @@ app.get('/api/logs/audit', authenticateToken, async (req, res) => {
       LEFT JOIN users u ON al.user_id = u.id
       ORDER BY al.created_at DESC
       LIMIT ? OFFSET ?
-    `, [parseInt(limit), parseInt(offset)]);
+    `;
+    
+    console.log('Executing audit query:', query);
+    const [rows] = await connection.execute(query, params);
     connection.release();
 
     res.json(rows);

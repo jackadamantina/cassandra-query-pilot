@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -7,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { Trash2, Edit, Plus, UserPlus, Users as UsersIcon } from "lucide-react";
+import { Trash2, Edit, Plus, UserPlus, Users as UsersIcon, ArrowLeft } from "lucide-react";
 import { apiService, User } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 
@@ -20,6 +21,7 @@ interface UserFormData {
 }
 
 const Users = () => {
+  const navigate = useNavigate();
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -35,8 +37,15 @@ const Users = () => {
   const { toast } = useToast();
 
   useEffect(() => {
+    // Verificar se está autenticado
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      navigate('/');
+      return;
+    }
+    
     loadUsers();
-  }, []);
+  }, [navigate]);
 
   const loadUsers = async () => {
     try {
@@ -187,6 +196,15 @@ const Users = () => {
         <div className="mb-8">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => navigate('/')}
+                className="flex items-center space-x-2"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>Voltar ao Dashboard</span>
+              </Button>
               <UsersIcon className="w-8 h-8 text-blue-600" />
               <h1 className="text-3xl font-bold text-gray-900">Gestão de Usuários</h1>
             </div>

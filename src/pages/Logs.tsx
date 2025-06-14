@@ -1,15 +1,17 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { FileText, Activity, Database, RefreshCw, Search } from "lucide-react";
+import { FileText, Activity, Database, RefreshCw, Search, ArrowLeft } from "lucide-react";
 import { apiService, QueryLog, AuditLog, User } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 
 const Logs = () => {
+  const navigate = useNavigate();
   const [queryLogs, setQueryLogs] = useState<QueryLog[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [users, setUsers] = useState<User[]>([]);
@@ -21,10 +23,17 @@ const Logs = () => {
   const { toast } = useToast();
 
   useEffect(() => {
+    // Verificar se está autenticado
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      navigate('/');
+      return;
+    }
+    
     loadUsers();
     loadQueryLogs();
     loadAuditLogs();
-  }, []);
+  }, [navigate]);
 
   useEffect(() => {
     loadQueryLogs();
@@ -121,6 +130,15 @@ const Logs = () => {
         <div className="mb-8">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => navigate('/')}
+                className="flex items-center space-x-2"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>Voltar ao Dashboard</span>
+              </Button>
               <FileText className="w-8 h-8 text-green-600" />
               <h1 className="text-3xl font-bold text-gray-900">Logs do Sistema</h1>
             </div>
