@@ -71,6 +71,9 @@ class ApiService {
   }
 
   private getHeaders() {
+    // Sempre verificar o token mais recente do localStorage
+    this.token = localStorage.getItem('authToken');
+    
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -129,6 +132,42 @@ class ApiService {
     return this.request<any[]>('/clusters/health');
   }
 
+  async createCluster(clusterData: {
+    name: string;
+    host: string;
+    port: number;
+    hosts: string;
+    datacenter: string;
+    username?: string | null;
+    password?: string | null;
+  }): Promise<{ message: string; id: number }> {
+    return this.request<{ message: string; id: number }>('/clusters', {
+      method: 'POST',
+      body: JSON.stringify(clusterData),
+    });
+  }
+
+  async updateCluster(id: number, clusterData: {
+    name: string;
+    host: string;
+    port: number;
+    hosts: string;
+    datacenter: string;
+    username?: string | null;
+    password?: string | null;
+  }): Promise<{ message: string }> {
+    return this.request<{ message: string }>(`/clusters/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(clusterData),
+    });
+  }
+
+  async deleteCluster(id: number): Promise<{ message: string }> {
+    return this.request<{ message: string }>(`/clusters/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
   // Queries
   async executeQuery(clusterId: number, query: string): Promise<QueryResult & { queryId: string }> {
     return this.request<QueryResult & { queryId: string }>('/query/execute', {
@@ -180,7 +219,7 @@ class ApiService {
   }
 
   // Logs
-  async getQueryLogs(page = 1, limit = 50, userId?: number, clusterId?: number): Promise<QueryLog[]> {
+  async getQueryLogs(page = 1, limit = 50, userId?: number, clusterId?: number, startDate?: string, endDate?: string): Promise<QueryLog[]> {
     const params = new URLSearchParams({
       page: page.toString(),
       limit: limit.toString(),
@@ -188,15 +227,21 @@ class ApiService {
 
     if (userId) params.append('userId', userId.toString());
     if (clusterId) params.append('clusterId', clusterId.toString());
+    if (startDate) params.append('startDate', startDate);
+    if (endDate) params.append('endDate', endDate);
 
     return this.request<QueryLog[]>(`/logs/queries?${params}`);
   }
 
-  async getAuditLogs(page = 1, limit = 50): Promise<AuditLog[]> {
+  async getAuditLogs(page = 1, limit = 50, userId?: number, startDate?: string, endDate?: string): Promise<AuditLog[]> {
     const params = new URLSearchParams({
       page: page.toString(),
       limit: limit.toString(),
     });
+
+    if (userId) params.append('userId', userId.toString());
+    if (startDate) params.append('startDate', startDate);
+    if (endDate) params.append('endDate', endDate);
 
     return this.request<AuditLog[]>(`/logs/audit?${params}`);
   }

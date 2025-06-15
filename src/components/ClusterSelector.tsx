@@ -14,7 +14,7 @@ export const ClusterSelector = ({ selectedCluster, onClusterChange, clusters }: 
       <label htmlFor="cluster-select" className="text-sm font-medium">
         Cluster Cassandra:
       </label>
-      <Select value={selectedCluster} onValueChange={onClusterChange}>
+      <Select value={selectedCluster || undefined} onValueChange={onClusterChange}>
         <SelectTrigger className="w-[600px]">
           <SelectValue placeholder="Selecione um cluster" />
         </SelectTrigger>

@@ -15,10 +15,13 @@ const Logs = () => {
   const [queryLogs, setQueryLogs] = useState<QueryLog[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  const [clusters, setClusters] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selectedUser, setSelectedUser] = useState<string>('');
-  const [selectedCluster, setSelectedCluster] = useState<string>('');
+  const [selectedUser, setSelectedUser] = useState<string>('all');
+  const [selectedCluster, setSelectedCluster] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
   const [page, setPage] = useState(1);
   const { toast } = useToast();
 
@@ -31,13 +34,14 @@ const Logs = () => {
     }
     
     loadUsers();
+    loadClusters();
     loadQueryLogs();
     loadAuditLogs();
   }, [navigate]);
 
   useEffect(() => {
     loadQueryLogs();
-  }, [selectedUser, selectedCluster, page]);
+  }, [selectedUser, selectedCluster, startDate, endDate, page]);
 
   const loadUsers = async () => {
     try {
@@ -48,12 +52,21 @@ const Logs = () => {
     }
   };
 
+  const loadClusters = async () => {
+    try {
+      const data = await apiService.getClusters();
+      setClusters(data);
+    } catch (error) {
+      console.error('Erro ao carregar clusters:', error);
+    }
+  };
+
   const loadQueryLogs = async () => {
     try {
       setLoading(true);
-      const userId = selectedUser ? parseInt(selectedUser) : undefined;
-      const clusterId = selectedCluster ? parseInt(selectedCluster) : undefined;
-      const data = await apiService.getQueryLogs(page, 50, userId, clusterId);
+      const userId = selectedUser && selectedUser !== 'all' ? parseInt(selectedUser) : undefined;
+      const clusterId = selectedCluster && selectedCluster !== 'all' ? parseInt(selectedCluster) : undefined;
+      const data = await apiService.getQueryLogs(page, 50, userId, clusterId, startDate, endDate);
       setQueryLogs(data);
     } catch (error) {
       toast({
@@ -68,7 +81,8 @@ const Logs = () => {
 
   const loadAuditLogs = async () => {
     try {
-      const data = await apiService.getAuditLogs(page, 50);
+      const userId = selectedUser && selectedUser !== 'all' ? parseInt(selectedUser) : undefined;
+      const data = await apiService.getAuditLogs(page, 50, userId, startDate, endDate);
       setAuditLogs(data);
     } catch (error) {
       toast({
@@ -151,20 +165,20 @@ const Logs = () => {
 
         {/* Filtros */}
         <div className="bg-white p-4 rounded-lg shadow mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Filtrar por Usuário
+                Usuário
               </label>
               <Select value={selectedUser} onValueChange={setSelectedUser}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Todos os usuários" />
+                  <SelectValue placeholder="Todos" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Todos os usuários</SelectItem>
+                  <SelectItem value="all">Todos os usuários</SelectItem>
                   {users.map((user) => (
                     <SelectItem key={user.id} value={user.id.toString()}>
-                      {user.username} ({user.full_name})
+                      {user.username}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -172,19 +186,43 @@ const Logs = () => {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Filtrar por Cluster
+                Cluster
               </label>
               <Select value={selectedCluster} onValueChange={setSelectedCluster}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Todos os clusters" />
+                  <SelectValue placeholder="Todos" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Todos os clusters</SelectItem>
-                  <SelectItem value="7">OMNI</SelectItem>
-                  <SelectItem value="8">BTG</SelectItem>
-                  <SelectItem value="9">CLICK</SelectItem>
+                  <SelectItem value="all">Todos os clusters</SelectItem>
+                  {clusters.map((cluster) => (
+                    <SelectItem key={cluster.id} value={cluster.id.toString()}>
+                      {cluster.name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Data Início
+              </label>
+              <Input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-full"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Data Fim
+              </label>
+              <Input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="w-full"
+              />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -193,7 +231,7 @@ const Logs = () => {
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
                 <Input
-                  placeholder="Buscar nos logs..."
+                  placeholder="Buscar..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10"
@@ -204,15 +242,17 @@ const Logs = () => {
               <Button
                 variant="outline"
                 onClick={() => {
-                  setSelectedUser('');
-                  setSelectedCluster('');
+                  setSelectedUser('all');
+                  setSelectedCluster('all');
+                  setStartDate('');
+                  setEndDate('');
                   setSearchTerm('');
                   loadQueryLogs();
                   loadAuditLogs();
                 }}
                 className="w-full"
               >
-                Limpar Filtros
+                Limpar
               </Button>
             </div>
           </div>

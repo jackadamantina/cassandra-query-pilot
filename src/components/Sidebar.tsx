@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Users, FileText, ChevronLeft, ChevronRight } from "lucide-react";
+import { Users, FileText, Settings, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 
@@ -22,6 +22,11 @@ export const Sidebar = ({ isCollapsed, onToggle }: SidebarProps) => {
       icon: FileText,
       label: "Logs",
       onClick: () => navigate('/logs'),
+    },
+    {
+      icon: Settings,
+      label: "Configuração",
+      onClick: () => navigate('/config'),
     },
   ];
 

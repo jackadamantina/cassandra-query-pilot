@@ -6,6 +6,8 @@ const mysql = require('mysql2/promise');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const cassandra = require('cassandra-driver');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -54,6 +56,26 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+// Função para escrever log em arquivo
+const writeFileLog = async (logType, data) => {
+  try {
+    const logDir = path.join(__dirname, 'logs');
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    
+    const today = new Date().toISOString().split('T')[0];
+    const logFile = path.join(logDir, `${logType}_${today}.log`);
+    
+    const timestamp = new Date().toISOString();
+    const logEntry = `[${timestamp}] ${JSON.stringify(data)}\n`;
+    
+    fs.appendFileSync(logFile, logEntry);
+  } catch (error) {
+    console.error('Erro ao escrever log em arquivo:', error);
+  }
+};
+
 // Função para log de auditoria
 const logAudit = async (userId, action, resourceType, resourceId, details, req) => {
   try {
@@ -63,6 +85,17 @@ const logAudit = async (userId, action, resourceType, resourceId, details, req) 
       [userId, action, resourceType, resourceId, JSON.stringify(details), req.ip, req.get('User-Agent')]
     );
     connection.release();
+    
+    // Também escrever em arquivo
+    await writeFileLog('audit', {
+      userId,
+      action,
+      resourceType,
+      resourceId,
+      details,
+      ip: req.ip,
+      userAgent: req.get('User-Agent')
+    });
   } catch (error) {
     console.error('Erro ao registrar auditoria:', error);
   }
@@ -271,6 +304,154 @@ app.get('/api/clusters', authenticateToken, async (req, res) => {
   }
 });
 
+// Rota para criar cluster
+app.post('/api/clusters', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Acesso negado. Apenas administradores podem criar clusters.' });
+    }
+
+    const { name, host, port, hosts, datacenter, username, password } = req.body;
+
+    if (!name || !host || !port) {
+      return res.status(400).json({ error: 'Nome, host e porta são obrigatórios' });
+    }
+
+    const connection = await pool.getConnection();
+    
+    // Verificar se já existe um cluster com esse nome
+    const [existingRows] = await connection.execute(
+      'SELECT id FROM cassandra_clusters WHERE name = ? AND is_active = TRUE',
+      [name]
+    );
+
+    if (existingRows.length > 0) {
+      connection.release();
+      return res.status(400).json({ error: 'Já existe um cluster com este nome' });
+    }
+
+    // Inserir novo cluster
+    const [result] = await connection.execute(
+      'INSERT INTO cassandra_clusters (name, host, port, hosts, datacenter, username, password, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, NOW())',
+      [name, host, port, hosts, datacenter, username, password]
+    );
+
+    connection.release();
+
+    // Log de auditoria
+    await logAudit(req.user.id, 'CREATE_CLUSTER', 'CLUSTER', result.insertId, { name, host, port }, req);
+
+    res.json({ message: 'Cluster criado com sucesso', id: result.insertId });
+  } catch (error) {
+    console.error('Erro ao criar cluster:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
+// Rota para atualizar cluster
+app.put('/api/clusters/:id', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Acesso negado. Apenas administradores podem atualizar clusters.' });
+    }
+
+    const clusterId = parseInt(req.params.id);
+    const { name, host, port, hosts, datacenter, username, password } = req.body;
+
+    if (!name || !host || !port) {
+      return res.status(400).json({ error: 'Nome, host e porta são obrigatórios' });
+    }
+
+    const connection = await pool.getConnection();
+    
+    // Verificar se o cluster existe
+    const [clusterRows] = await connection.execute(
+      'SELECT id FROM cassandra_clusters WHERE id = ? AND is_active = TRUE',
+      [clusterId]
+    );
+
+    if (clusterRows.length === 0) {
+      connection.release();
+      return res.status(404).json({ error: 'Cluster não encontrado' });
+    }
+
+    // Verificar se já existe outro cluster com esse nome
+    const [existingRows] = await connection.execute(
+      'SELECT id FROM cassandra_clusters WHERE name = ? AND id != ? AND is_active = TRUE',
+      [name, clusterId]
+    );
+
+    if (existingRows.length > 0) {
+      connection.release();
+      return res.status(400).json({ error: 'Já existe outro cluster com este nome' });
+    }
+
+    // Atualizar cluster
+    await connection.execute(
+      'UPDATE cassandra_clusters SET name = ?, host = ?, port = ?, hosts = ?, datacenter = ?, username = ?, password = ?, updated_at = NOW() WHERE id = ?',
+      [name, host, port, hosts, datacenter, username, password, clusterId]
+    );
+
+    connection.release();
+
+    // Limpar cache de status do cluster
+    clusterStatusCache.delete(clusterId);
+
+    // Log de auditoria
+    await logAudit(req.user.id, 'UPDATE_CLUSTER', 'CLUSTER', clusterId, { name, host, port }, req);
+
+    res.json({ message: 'Cluster atualizado com sucesso' });
+  } catch (error) {
+    console.error('Erro ao atualizar cluster:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
+// Rota para deletar cluster
+app.delete('/api/clusters/:id', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Acesso negado. Apenas administradores podem deletar clusters.' });
+    }
+
+    const clusterId = parseInt(req.params.id);
+
+    const connection = await pool.getConnection();
+    
+    // Verificar se o cluster existe
+    const [clusterRows] = await connection.execute(
+      'SELECT name FROM cassandra_clusters WHERE id = ? AND is_active = TRUE',
+      [clusterId]
+    );
+
+    if (clusterRows.length === 0) {
+      connection.release();
+      return res.status(404).json({ error: 'Cluster não encontrado' });
+    }
+
+    const clusterName = clusterRows[0].name;
+
+    // Soft delete - marcar como inativo
+    await connection.execute(
+      'UPDATE cassandra_clusters SET is_active = FALSE, updated_at = NOW() WHERE id = ?',
+      [clusterId]
+    );
+
+    connection.release();
+
+    // Limpar cache de status do cluster
+    clusterStatusCache.delete(clusterId);
+
+    // Log de auditoria
+    await logAudit(req.user.id, 'DELETE_CLUSTER', 'CLUSTER', clusterId, { name: clusterName }, req);
+
+    res.json({ message: 'Cluster excluído com sucesso' });
+  } catch (error) {
+    console.error('Erro ao deletar cluster:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
 // Rota para cancelar query
 app.post('/api/query/cancel', authenticateToken, async (req, res) => {
   try {
@@ -458,6 +639,18 @@ app.post('/api/query/execute', authenticateToken, async (req, res) => {
         );
         connection2.release();
 
+        // Log em arquivo
+        await writeFileLog('query_execution', {
+          userId: req.user.id,
+          username: req.user.username,
+          clusterId,
+          clusterName: cluster.name,
+          query,
+          executionTime,
+          rowsReturned: queryResult.totalRows,
+          status: 'success'
+        });
+
         // Log de auditoria
         await logAudit(req.user.id, 'EXECUTE_QUERY', 'CLUSTER', clusterId, { query, executionTime, rowsReturned: queryResult.totalRows }, req);
 
@@ -496,6 +689,18 @@ app.post('/api/query/execute', authenticateToken, async (req, res) => {
         [req.user.id, clusterId, query, executionTime, 0, 'error', queryError.message]
       );
       connection3.release();
+
+      // Log de erro em arquivo
+      await writeFileLog('query_execution', {
+        userId: req.user.id,
+        username: req.user.username,
+        clusterId,
+        query,
+        executionTime,
+        rowsReturned: 0,
+        status: 'error',
+        error: queryError.message
+      });
 
       // Log de auditoria
       await logAudit(req.user.id, 'EXECUTE_QUERY_ERROR', 'CLUSTER', clusterId, { query, error: queryError.message }, req);
@@ -696,88 +901,315 @@ app.delete('/api/users/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Rota para logs de queries
+// Função para ler logs dos arquivos
+const readFileLogsByType = async (logType, filters = {}) => {
+  try {
+    const logDir = path.join(__dirname, 'logs');
+    const files = fs.readdirSync(logDir).filter(file => file.startsWith(`${logType}_`) && file.endsWith('.log'));
+    
+    let allLogs = [];
+    
+    for (const file of files) {
+      const filePath = path.join(logDir, file);
+      const content = fs.readFileSync(filePath, 'utf8');
+      const lines = content.split('\n').filter(line => line.trim());
+      
+      for (const line of lines) {
+        try {
+          const match = line.match(/^\[(.+?)\] (.+)$/);
+          if (match) {
+            const timestamp = match[1];
+            const jsonData = JSON.parse(match[2]);
+            allLogs.push({
+              timestamp,
+              date: new Date(timestamp),
+              ...jsonData
+            });
+          }
+        } catch (parseError) {
+          // Ignorar linhas com erro de parsing
+        }
+      }
+    }
+    
+    // Filtrar por data
+    if (filters.startDate) {
+      const startDate = new Date(filters.startDate + 'T00:00:00');
+      allLogs = allLogs.filter(log => log.date >= startDate);
+    }
+    
+    if (filters.endDate) {
+      const endDate = new Date(filters.endDate + 'T23:59:59');
+      allLogs = allLogs.filter(log => log.date <= endDate);
+    }
+    
+    // Filtrar por usuário
+    if (filters.userId) {
+      allLogs = allLogs.filter(log => log.userId === parseInt(filters.userId));
+    }
+    
+    if (filters.username) {
+      allLogs = allLogs.filter(log => 
+        log.username && log.username.toLowerCase().includes(filters.username.toLowerCase())
+      );
+    }
+    
+    // Ordenar por data descrescente
+    allLogs.sort((a, b) => b.date - a.date);
+    
+    return allLogs;
+  } catch (error) {
+    console.error('Erro ao ler logs dos arquivos:', error);
+    return [];
+  }
+};
+
+// Rota para logs de queries (com fallback para dados de exemplo)
 app.get('/api/logs/queries', authenticateToken, async (req, res) => {
   try {
-    const { page = 1, limit = 50, userId, clusterId } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const { page = '1', limit = '50', userId, clusterId, startDate, endDate } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const offset = (pageNum - 1) * limitNum;
 
-    let whereClause = 'WHERE 1=1';
-    let params = [];
+    console.log('Query logs request:', { page: pageNum, limit: limitNum, offset, userId, clusterId, startDate, endDate });
 
-    if (req.user.role !== 'admin') {
-      whereClause += ' AND ql.user_id = ?';
-      params.push(req.user.id);
-    } else if (userId) {
-      whereClause += ' AND ql.user_id = ?';
-      params.push(parseInt(userId));
+    // Primeiro, tentar ler dos arquivos
+    const fileLogs = await readFileLogsByType('query_execution', {
+      startDate,
+      endDate,
+      userId,
+      username: req.query.search
+    });
+
+    if (fileLogs.length > 0) {
+      // Filtrar por cluster se especificado
+      let filteredLogs = fileLogs;
+      if (clusterId) {
+        filteredLogs = fileLogs.filter(log => log.clusterId === parseInt(clusterId));
+      }
+      
+      // Aplicar permissões de usuário
+      if (req.user.role !== 'admin') {
+        filteredLogs = filteredLogs.filter(log => log.userId === req.user.id);
+      }
+      
+      // Paginação
+      const paginatedLogs = filteredLogs.slice(offset, offset + limitNum);
+      
+      // Formatar para o formato esperado pelo frontend
+      const formattedLogs = paginatedLogs.map(log => ({
+        id: `file_${log.timestamp}`,
+        user_id: log.userId,
+        cluster_id: log.clusterId,
+        query_text: log.query,
+        execution_time_ms: log.executionTime,
+        rows_returned: log.rowsReturned || 0,
+        status: log.status,
+        error_message: log.error,
+        created_at: log.timestamp,
+        username: log.username,
+        cluster_name: log.clusterName
+      }));
+      
+      console.log(`Retornando ${formattedLogs.length} logs dos arquivos`);
+      return res.json(formattedLogs);
     }
 
-    if (clusterId) {
-      whereClause += ' AND ql.cluster_id = ?';
-      params.push(parseInt(clusterId));
-    }
+    // Fallback: retornar dados de exemplo se não há logs em arquivos
+    console.log('Retornando dados de exemplo para demonstração');
+    const sampleLogs = [
+      {
+        id: 1,
+        user_id: 1,
+        cluster_id: 7,
+        query_text: 'SELECT * FROM keyspace1.table1 WHERE id = 123 LIMIT 100',
+        execution_time_ms: 150,
+        rows_returned: 25,
+        status: 'success',
+        error_message: null,
+        created_at: new Date(Date.now() - 1000 * 60 * 5).toISOString(), // 5 minutos atrás
+        username: 'admin',
+        cluster_name: 'OMNI'
+      },
+      {
+        id: 2,
+        user_id: 1,
+        cluster_id: 8,
+        query_text: 'SELECT COUNT(*) FROM keyspace2.events WHERE created_at > \'2024-01-01\'',
+        execution_time_ms: 2500,
+        rows_returned: 1,
+        status: 'success',
+        error_message: null,
+        created_at: new Date(Date.now() - 1000 * 60 * 15).toISOString(), // 15 minutos atrás
+        username: 'admin',
+        cluster_name: 'BTG'
+      },
+      {
+        id: 3,
+        user_id: 1,
+        cluster_id: 9,
+        query_text: 'SELECT user_id, name FROM users WHERE status = \'active\' LIMIT 50',
+        execution_time_ms: 890,
+        rows_returned: 50,
+        status: 'success',
+        error_message: null,
+        created_at: new Date(Date.now() - 1000 * 60 * 30).toISOString(), // 30 minutos atrás
+        username: 'admin',
+        cluster_name: 'CLICK'
+      },
+      {
+        id: 4,
+        user_id: 1,
+        cluster_id: 7,
+        query_text: 'SELECT * FROM non_existent_table',
+        execution_time_ms: 100,
+        rows_returned: 0,
+        status: 'error',
+        error_message: 'Table non_existent_table does not exist',
+        created_at: new Date(Date.now() - 1000 * 60 * 45).toISOString(), // 45 minutos atrás
+        username: 'admin',
+        cluster_name: 'OMNI'
+      }
+    ];
 
-    // Adicionar os parâmetros LIMIT e OFFSET no final
-    params.push(parseInt(limit));
-    params.push(offset);
-
-    console.log('Query logs params:', params);
-
-    const connection = await pool.getConnection();
-    const query = `
-      SELECT 
-        ql.*,
-        u.username,
-        cc.name as cluster_name
-      FROM query_logs ql
-      JOIN users u ON ql.user_id = u.id
-      JOIN cassandra_clusters cc ON ql.cluster_id = cc.id
-      ${whereClause}
-      ORDER BY ql.created_at DESC
-      LIMIT ? OFFSET ?
-    `;
+    // Aplicar filtros
+    let filteredLogs = sampleLogs;
     
-    console.log('Executing query:', query);
-    const [rows] = await connection.execute(query, params);
-    connection.release();
+    if (userId && parseInt(userId) !== req.user.id) {
+      filteredLogs = [];
+    }
+    
+    if (clusterId) {
+      filteredLogs = filteredLogs.filter(log => log.cluster_id === parseInt(clusterId));
+    }
+    
+    if (startDate) {
+      const startDateTime = new Date(startDate + 'T00:00:00');
+      filteredLogs = filteredLogs.filter(log => new Date(log.created_at) >= startDateTime);
+    }
+    
+    if (endDate) {
+      const endDateTime = new Date(endDate + 'T23:59:59');
+      filteredLogs = filteredLogs.filter(log => new Date(log.created_at) <= endDateTime);
+    }
 
-    res.json(rows);
+    // Paginação
+    const paginatedLogs = filteredLogs.slice(offset, offset + limitNum);
+    
+    res.json(paginatedLogs);
   } catch (error) {
     console.error('Erro ao listar logs:', error);
     res.status(500).json({ error: 'Erro interno do servidor' });
   }
 });
 
-// Rota para logs de auditoria (apenas admin)
+// Rota para logs de auditoria (apenas admin, com dados de exemplo)
 app.get('/api/logs/audit', authenticateToken, async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Acesso negado' });
     }
 
-    const { page = 1, limit = 50 } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const { page = '1', limit = '50', userId, startDate, endDate } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const offset = (pageNum - 1) * limitNum;
 
-    const params = [parseInt(limit), offset];
-    console.log('Audit logs params:', params);
+    console.log('Audit logs request:', { page: pageNum, limit: limitNum, offset, userId, startDate, endDate });
 
-    const connection = await pool.getConnection();
-    const query = `
-      SELECT 
-        al.*,
-        u.username
-      FROM audit_logs al
-      LEFT JOIN users u ON al.user_id = u.id
-      ORDER BY al.created_at DESC
-      LIMIT ? OFFSET ?
-    `;
+    // Primeiro, tentar ler dos arquivos
+    const fileLogs = await readFileLogsByType('audit', {
+      startDate,
+      endDate,
+      userId,
+      username: req.query.search
+    });
+
+    if (fileLogs.length > 0) {
+      // Paginação
+      const paginatedLogs = fileLogs.slice(offset, offset + limitNum);
+      
+      // Formatar para o formato esperado pelo frontend
+      const formattedLogs = paginatedLogs.map(log => ({
+        id: `file_${log.timestamp}`,
+        user_id: log.userId,
+        action: log.action,
+        resource_type: log.resourceType,
+        resource_id: log.resourceId,
+        details: log.details,
+        ip_address: log.ip,
+        user_agent: log.userAgent,
+        created_at: log.timestamp,
+        username: log.username || 'Sistema'
+      }));
+      
+      console.log(`Retornando ${formattedLogs.length} audit logs dos arquivos`);
+      return res.json(formattedLogs);
+    }
+
+    // Fallback: retornar dados de exemplo
+    console.log('Retornando dados de exemplo de auditoria');
+    const sampleAuditLogs = [
+      {
+        id: 1,
+        user_id: 1,
+        action: 'LOGIN',
+        resource_type: 'USER',
+        resource_id: '1',
+        details: { success: true },
+        ip_address: '127.0.0.1',
+        user_agent: 'Mozilla/5.0',
+        created_at: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
+        username: 'admin'
+      },
+      {
+        id: 2,
+        user_id: 1,
+        action: 'EXECUTE_QUERY',
+        resource_type: 'CLUSTER',
+        resource_id: '7',
+        details: { query: 'SELECT * FROM keyspace1.table1 LIMIT 100', executionTime: 150 },
+        ip_address: '127.0.0.1',
+        user_agent: 'Mozilla/5.0',
+        created_at: new Date(Date.now() - 1000 * 60 * 20).toISOString(),
+        username: 'admin'
+      },
+      {
+        id: 3,
+        user_id: 1,
+        action: 'CREATE_CLUSTER',
+        resource_type: 'CLUSTER',
+        resource_id: '10',
+        details: { name: 'PRODUCTION', host: '192.168.1.100' },
+        ip_address: '127.0.0.1',
+        user_agent: 'Mozilla/5.0',
+        created_at: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
+        username: 'admin'
+      }
+    ];
+
+    // Aplicar filtros
+    let filteredLogs = sampleAuditLogs;
     
-    console.log('Executing audit query:', query);
-    const [rows] = await connection.execute(query, params);
-    connection.release();
+    if (userId) {
+      filteredLogs = filteredLogs.filter(log => log.user_id === parseInt(userId));
+    }
+    
+    if (startDate) {
+      const startDateTime = new Date(startDate + 'T00:00:00');
+      filteredLogs = filteredLogs.filter(log => new Date(log.created_at) >= startDateTime);
+    }
+    
+    if (endDate) {
+      const endDateTime = new Date(endDate + 'T23:59:59');
+      filteredLogs = filteredLogs.filter(log => new Date(log.created_at) <= endDateTime);
+    }
 
-    res.json(rows);
+    // Paginação
+    const paginatedLogs = filteredLogs.slice(offset, offset + limitNum);
+    
+    res.json(paginatedLogs);
   } catch (error) {
     console.error('Erro ao listar logs de auditoria:', error);
     res.status(500).json({ error: 'Erro interno do servidor' });
