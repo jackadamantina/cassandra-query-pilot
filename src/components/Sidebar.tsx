@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Users, FileText, Settings, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,24 +11,50 @@ interface SidebarProps {
 
 export const Sidebar = ({ isCollapsed, onToggle }: SidebarProps) => {
   const navigate = useNavigate();
+  const [userRole, setUserRole] = useState<string>('');
+
+  useEffect(() => {
+    const token = localStorage.getItem('authToken');
+    if (token) {
+      try {
+        const base64Url = token.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(atob(base64).split('').map(c => 
+          '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+        ).join(''));
+
+        const { role } = JSON.parse(jsonPayload);
+        setUserRole(role);
+      } catch (error) {
+        console.error('Error decoding token:', error);
+      }
+    }
+  }, []);
 
   const menuItems = [
     {
       icon: Users,
       label: "Usuários",
       onClick: () => navigate('/users'),
+      allowedRoles: ['admin']
     },
     {
       icon: FileText,
       label: "Logs",
       onClick: () => navigate('/logs'),
+      allowedRoles: ['admin']
     },
     {
       icon: Settings,
       label: "Configuração",
       onClick: () => navigate('/config'),
+      allowedRoles: ['admin']
     },
   ];
+
+  const authorizedMenuItems = menuItems.filter(item => 
+    item.allowedRoles.includes(userRole)
+  );
 
   return (
     <div className={`bg-blue-900 text-white transition-all duration-300 ${
@@ -54,7 +80,7 @@ export const Sidebar = ({ isCollapsed, onToggle }: SidebarProps) => {
       {/* Menu Items */}
       <nav className="flex-1 p-2">
         <ul className="space-y-2">
-          {menuItems.map((item, index) => (
+          {authorizedMenuItems.map((item, index) => (
             <li key={index}>
               <Button
                 variant="ghost"
